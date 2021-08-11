@@ -23,6 +23,7 @@ To get the icon and the admin privilege needed to create/modify files where it s
 - Backup? 
 - Restore the panic button
 - Draw a padlock.ico
+- Maybe Portuguese Dictionary ?
 
 ## Important thoughts:
 
