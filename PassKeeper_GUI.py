@@ -36,9 +36,9 @@ main_menu_layout = [[sg.Text('Hello. What do you want for today?')],
 # [sg.Button('Panic', key='-Panic-')]]
 
 add_new_acc_layout = [[sg.Text('Hello. Please Type a Name, Username and Password')],
-                      [sg.Input(key='-NewName-')],
-                      [sg.Input(key='-NewUsr-')],
-                      [sg.Input(key='-NewPwd-'),
+                      [sg.Text("Account Name: "), sg.Input(key='-NewName-')],
+                      [sg.Text("Username: "), sg.Input(key='-NewUsr-')],
+                      [sg.Text("Password: "), sg.Input(key='-NewPwd-'),
                        sg.Button('Generate', key='GenPwd')],
                       [sg.Button('Save', key='NewSave'), sg.Exit()]]
 
