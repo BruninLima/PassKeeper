@@ -24,6 +24,7 @@ To get the icon and the admin privilege needed to create/modify files where it s
 - Restore the panic button
 - Draw a padlock.ico
 - Maybe Portuguese Dictionary ?
+- Folders/Categories to organize the passwords
 
 ## Important thoughts:
 
