@@ -25,6 +25,7 @@ To get the icon and the admin privilege needed to create/modify files where it s
 - Draw a padlock.ico
 - Maybe Portuguese Dictionary ?
 - Folders/Categories to organize the passwords
+- Delete password -> reorder passwords/salts
 
 ## Important thoughts:
 
