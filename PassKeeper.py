@@ -9,6 +9,7 @@ from secrets import SystemRandom, token_bytes
 accs_path = 'accounts.json'
 salt_path = 'salt.txt'
 mpwd_path = 'safe/main_password.txt'
+bkps_path = 'bkp.txt'
 
 # Main Functions
 
@@ -71,21 +72,17 @@ def addentry(name, usr, pwd):
 
     with open(salt_path, 'a') as f:
         f.write('\n')
-        f.write(str(entry_idx) + ', ' + pwd_salt)
+        f.write(pwd_salt)
 
 
 def show_entry_password(entries):
-    # print('Please Type Your Main Password')
-    # mp_temp = input()
 
-    # if check_master_password(mp_temp):
     a_list = []
     for entry_idx in entries:
         try:
             with open(salt_path, 'r') as f:
                 temp = f.read()
-            seed_idx = temp.split(
-                str(entry_idx) + ', ')[-1].split(str(entry_idx+1) + ', ')[0]
+            salt = temp.split('\n')[entry_idx]
             with open(accs_path, 'r') as f:
                 temp = json.load(f)
             acc = temp[str(entry_idx)]
@@ -93,10 +90,72 @@ def show_entry_password(entries):
             break
 
         a_list.append([acc['name'], acc['usr'], decrypt(
-            acc["pwd"]).split(seed_idx[:-2])[0]])
+            acc["pwd"]).split(salt[:-2])[0]])
     return a_list
-    # else:
-    #     print('Wrong Master Password')
+
+
+def remove_account(acc_idx):
+    # remove the acc salt
+
+    with open(salt_path, 'r') as f:
+        lines = f.readlines()
+
+    int_idx = int(acc_idx)
+    lines = lines[:int_idx] + lines[int_idx+1:]
+
+    with open(salt_path, 'w') as f:
+        for line in lines:
+            f.write(line)
+
+    # remove the acc from the json and update the acc.json file
+
+    with open(accs_path, 'r') as f:
+        temp = json.load(f)
+    temp.pop(acc_idx)
+    vals = [temp[t] for t in temp]
+    data = {i+1: val for i, val in enumerate(vals)}
+    with open(accs_path, 'w') as f:
+        json.dump(data, f)
+
+
+def create_backup():
+
+    # Stores: Salt, Accs, Mainpasswrd
+    with open(salt_path, 'r') as f:
+        temp_salt = f.read()
+    with open(accs_path, 'r') as f:
+        temp_accs = f.read()
+    with open(mpwd_path, 'r') as f:
+        temp_mpwd = f.read()
+
+    with open(bkps_path, 'w') as f:
+        f.write(encrypt(temp_salt))
+        f.write('.b1.')
+        f.write(encrypt(temp_accs))
+        f.write('.b1.')
+        f.write(encrypt(temp_mpwd))
+
+
+def loads_backup():
+
+    # Loads: Salt, Accs, Mainpasswrd
+
+    with open(bkps_path, 'r') as f:
+        temp_bkp = f.read().split('.b1.')
+
+    salt, accs, mpwd = map(decrypt, temp_bkp)
+
+    with open(salt_path, 'w') as f:
+        f.write(salt)
+    with open(accs_path, 'w') as f:
+        f.write(accs)
+    with open(mpwd_path, 'w') as f:
+        f.write(mpwd)
+
+
+def check_files_integrity():
+    # creates a backup hash and compares with current backup.
+    pass
 
 
 def wipe_all_data():
@@ -105,3 +164,24 @@ def wipe_all_data():
     os_remove(accs_path)
     os_remove(salt_path)
     os_remove(mpwd_path)
+
+
+def load_storage():
+
+    p_names = []
+    p_urss = {}
+    p_pwds = {}
+    accounts = {'': ''}
+    acc_idxs = {}
+    sep = show_entry_password(range(1, 50))
+    for idx, pwrd_entry in enumerate(sep):
+        p_name, p_usr, p_pwd = pwrd_entry
+        main_str = "Name: " + p_name + \
+            '\n' + "Username: " + p_usr + '\n' + "Password: ****"
+        p_urss[p_name] = p_usr
+        p_pwds[p_name] = p_pwd
+        accounts[p_name] = main_str
+        acc_idxs[p_name] = str(idx+1)
+        p_names.append(p_name)
+
+    return p_names, p_urss, p_pwds, accounts, acc_idxs

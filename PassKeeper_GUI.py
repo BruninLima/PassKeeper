@@ -10,6 +10,7 @@ from PasswordGenerator import pw
 accs_path = 'accounts.json'
 mpwd_path = 'safe/main_password.txt'
 MAIN_PATH = r''
+
 # Main Functions
 
 sg.theme('DarkAmber')    # Keep things interesting for your users
@@ -32,7 +33,8 @@ insert_mp_layout = [[sg.Text('Hello. Please Type Your Master Username and Master
 main_menu_layout = [[sg.Text('Hello. What do you want for today?')],
                     [sg.Button('Add new account and password',
                                key='-StoreAcc-')],
-                    [sg.Button('View Stored Passwords', key='-Storage-')]]  # ,
+                    [sg.Button('View Stored Passwords', key='-Storage-')],
+                    [sg.Button('Backup files', key='-Create_Bkp-'), sg.Button('Load Backup', key='-Load_Bkp-')]]  # ,
 # [sg.Button('Panic', key='-Panic-')]]
 
 add_new_acc_layout = [[sg.Text('Hello. Please Type a Name, Username and Password')],
@@ -42,13 +44,10 @@ add_new_acc_layout = [[sg.Text('Hello. Please Type a Name, Username and Password
                        sg.Button('Generate', key='GenPwd')],
                       [sg.Button('Save', key='NewSave'), sg.Exit()]]
 
-# storage_layout = [[sg.Text('Hello. These are your stored passwords')],
-#                 [sg.Output(size=(50, 10), key='-StoredPasswords-')]]
-
 name_list_column = [[sg.Text("Account Names")],
                     [sg.Listbox(values=[], size=(50, 25),
                                 key='-LIST-', enable_events=True)],
-                    [sg.Button("Show Password", key='-SHOWPASSWORD-'), sg.Button("Hide Password", key='-HIDEPASSWORD-'), sg.Button("Back", key='-BACK-')]]
+                    [sg.Button("Show Password", key='-SHOWPASSWORD-'), sg.Button("Hide Password", key='-HIDEPASSWORD-'), sg.Button("Delete Account", key='-delete_account-'), sg.Button("Back", key='-BACK-')]]
 password_viewer_column = [
     [sg.Text("Choose an account from the list on the left")],
     [sg.Text(size=(50, 25), key='-PASSWORDOUT-')],
@@ -95,7 +94,6 @@ while True:
     if new_acc == True:
         window['-SetupMP-'].update(visible=True)
 
-    print(values)
     if event == 'SetupMasterUser':
         Pk.store_main_password(
             values['-SetMasterUsername-'], values['-SetMasterPassword-'])
@@ -121,23 +119,10 @@ while True:
 
     if event == '-Storage-':
 
-        p_names = []
-        p_urss = {}
-        p_pwds = {}
-        accounts = {'': ''}
-
+        p_names, p_urss, p_pwds, accounts, acc_idxs = Pk.load_storage()
         window['-CheckMP-'].update(visible=False)
         window['-MainMenu-'].update(visible=False)
         window['-StorageMenu-'].update(visible=True)
-        main_str = ''
-        for idx, pwrd_entry in enumerate(Pk.show_entry_password(range(1, 11))):
-            p_name, p_usr, p_pwd = pwrd_entry
-            main_str = "Name: " + p_name + \
-                '\n' + "Username: " + p_usr + '\n' + "Password: ***"
-            p_urss[p_name] = p_usr
-            p_pwds[p_name] = p_pwd
-            accounts[p_name] = main_str
-            p_names.append(p_name)
         window["-LIST-"].update(p_names)
 
     if event == "-LIST-":  # a file was chosen from the list
@@ -148,11 +133,18 @@ while True:
     if event == "-SHOWPASSWORD-":
         window['-CheckMP-'].update(visible=False)
         window['-PASSWORDOUT-'].update(accounts[acc_name]
-                                       [:-3] + p_pwds[acc_name])
+                                       [:-4] + p_pwds[acc_name])
 
     if event == "-HIDEPASSWORD-":
         window['-CheckMP-'].update(visible=False)
         window['-PASSWORDOUT-'].update(accounts[acc_name])
+
+    if event == '-delete_account-':
+        Pk.remove_account(acc_idxs[acc_name])
+        p_names, p_urss, p_pwds, accounts, acc_idxs = Pk.load_storage()
+        window['-CheckMP-'].update(visible=False)
+        window["-LIST-"].update([])
+        window["-LIST-"].update(p_names)
 
     if event == "-COPYUSR":
         window['CheckMP-'].update(visible=False)
@@ -189,6 +181,15 @@ while True:
         window['-NewPwd-'].update(pw())
         window['-CheckMP-'].update(visible=False)
 
+    if event == "-Create_Bkp-":
+        Pk.create_backup()
+        window['-CheckMP-'].update(visible=False)
+
+    if event == "-Load_Bkp-":
+        Pk.loads_backup()
+        window['-MainMenu-'].update(visible=False)
+
     if event == 'No' or event == sg.WIN_CLOSED or event == "Exit":
-        break
+        Pk.create_backup()
+        window.close()
 window.close()
