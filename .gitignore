@@ -1,0 +1,16 @@
+# Your vault and backups: never commit these
+vault.pk
+vault.pk.*.tmp
+backups/
+
+# PassKeeper 1.x files
+accounts.json
+salt.txt
+bkp.txt
+safe/
+
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
