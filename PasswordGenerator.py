@@ -72,6 +72,123 @@ def generate():
     return pw()
 
 
+def passphrase(words=4, separator=None, capitalize=True, include_number=True):
+    """Words joined by a separator, e.g. ``Ocean-Tiger-Pencil-Cloud-58``.
+
+    ``separator=None`` picks a random separator between each word."""
+    if words < 1:
+        raise ValueError("Use at least one word.")
+    parts = [get_random_word(3, 8) for _ in range(words)]
+    if capitalize:
+        parts = [p.title() for p in parts]
+    if include_number:
+        parts.insert(secrets.randbelow(len(parts) + 1), str(secrets.randbelow(1000)))
+    if separator is not None:
+        return separator.join(parts)
+    out = parts[0]
+    for part in parts[1:]:
+        out += secrets.choice(SEPARATORS) + part
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Random-character passwords
+# --------------------------------------------------------------------------- #
+
+LOWER = "abcdefghijklmnopqrstuvwxyz"
+UPPER = LOWER.upper()
+DIGITS = "0123456789"
+SYMBOLS = "!@#$%^&*()-_=+[]{};:,.?/~"
+AMBIGUOUS = set("Il1O0o")
+
+
+def random_password(length=20, lower=True, upper=True, digits=True, symbols=True,
+                    avoid_ambiguous=False):
+    """Random characters, with at least one of every chosen kind."""
+    groups = [g for g, wanted in ((LOWER, lower), (UPPER, upper), (DIGITS, digits),
+                                  (SYMBOLS, symbols)) if wanted]
+    if avoid_ambiguous:
+        groups = ["".join(c for c in g if c not in AMBIGUOUS) for g in groups]
+    if not groups:
+        raise ValueError("Choose at least one kind of character.")
+    if length < len(groups):
+        raise ValueError(f"The length must be at least {len(groups)}.")
+    alphabet = "".join(groups)
+    chars = [secrets.choice(g) for g in groups]
+    chars += [secrets.choice(alphabet) for _ in range(length - len(groups))]
+    # Fisher-Yates shuffle with a secure random source
+    for i in range(len(chars) - 1, 0, -1):
+        j = secrets.randbelow(i + 1)
+        chars[i], chars[j] = chars[j], chars[i]
+    return "".join(chars)
+
+
+# --------------------------------------------------------------------------- #
+# Strength estimate
+# --------------------------------------------------------------------------- #
+
+COMMON_PASSWORDS = {
+    "password", "passw0rd", "123456", "12345678", "123456789", "1234567890", "qwerty",
+    "qwertyuiop", "abc123", "111111", "letmein", "iloveyou", "admin", "welcome",
+    "monkey", "dragon", "football", "baseball", "sunshine", "princess", "master",
+    "senha", "senha123", "123mudar", "mudar123",
+}
+STRENGTH_LABELS = ((28, "Very weak"), (40, "Weak"), (60, "Fair"), (80, "Strong"))
+
+
+def _pool_size(text):
+    pool = 0
+    if any(c in LOWER for c in text):
+        pool += 26
+    if any(c in UPPER for c in text):
+        pool += 26
+    if any(c in DIGITS for c in text):
+        pool += 10
+    if any(not c.isalnum() for c in text):
+        pool += 33
+    if any(ord(c) > 127 for c in text):
+        pool += 100
+    return pool
+
+
+def estimate_strength(password):
+    """Rough guess of how hard a password is to crack.
+
+    Returns (bits, label). Word-based passwords are counted per dictionary word,
+    and common passwords or a single dictionary word with a few extra digits/
+    symbols are rated as what they are: easy to guess."""
+    import math
+    if not password:
+        return 0, "Very weak"
+    lowered = password.casefold()
+    if lowered in COMMON_PASSWORDS or len(set(password)) <= 2:
+        return 5, "Very weak"
+
+    words = set(load_dictionary(3, 12))
+    dict_bits = math.log2(max(len(words), 2))
+
+    # Split into words/numbers/other pieces and score each piece.
+    import re
+    bits = 0.0
+    pieces = re.findall(r"[A-Za-z]+|\d+|[^A-Za-z\d]+", password)
+    for piece in pieces:
+        if piece.isalpha() and piece.casefold() in words:
+            bits += dict_bits + (1 if not piece.islower() else 0)
+        elif piece.isdigit():
+            bits += len(piece) * math.log2(10)
+        else:
+            bits += len(piece) * math.log2(max(_pool_size(piece), 2))
+    if len(pieces) > 1:
+        bits += math.log2(len(pieces))   # where the pieces go
+    # never rate higher than the plain brute-force estimate
+    bits = min(bits, len(password) * math.log2(max(_pool_size(password), 2)))
+    bits = int(bits)
+    for limit, label in STRENGTH_LABELS:
+        if bits < limit:
+            return bits, label
+    return bits, "Very strong"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("-n", "--min_word_length", type=int,

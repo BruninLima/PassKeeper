@@ -1,6 +1,7 @@
 # Your vault and backups: never commit these
 vault.pk
 vault.pk.*.tmp
+vault.pk.lock
 backups/
 
 # PassKeeper 1.x files
