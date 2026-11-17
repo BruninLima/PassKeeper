@@ -32,11 +32,13 @@ converts them into a vault and then overwrites and deletes them.
 
 from __future__ import annotations
 
+import ast
 import base64
 import csv
 import hashlib
 import json
 import os
+import re
 import secrets
 import sys
 import tempfile
@@ -322,6 +324,8 @@ class Vault:
         self._kdf = kdf
         self.entries = entries
         self.settings = settings or Settings()
+        self.migration_unsure: list[str] = []   # set by migrate_legacy
+        self.legacy_files_kept = False
 
     @property
     def backup_dir(self) -> Path:
@@ -751,15 +755,56 @@ def wipe_all_data(vault_path: Path | None = None) -> int:
 # Migration from PassKeeper 1.x
 # --------------------------------------------------------------------------- #
 
-LEGACY_ACCOUNTS = "accounts.json"
-LEGACY_SALTS = "salt.txt"
+# PassKeeper 1.x kept its files next to where it was started:
+#   accounts.json, salt.txt, safe/main_password.txt (and bkp.txt)
+# A later local version ("BetterPassKeeper") used sub-folders instead:
+#   data/accounts.json, salts/salt.txt, safe/main_password.txt
+# and wrote its salt lines as "<account number>, <salt>".
 LEGACY_MASTER = os.path.join("safe", "main_password.txt")
+LEGACY_ACCOUNTS_CANDIDATES = ("accounts.json", os.path.join("data", "accounts.json"))
+LEGACY_SALTS_CANDIDATES = ("salt.txt", os.path.join("salts", "salt.txt"))
 LEGACY_BACKUP = "bkp.txt"
+LEGACY_SALT_BYTES = 17      # every 1.x salt was str(token_bytes(17))
+_NUMBERED_SALT = re.compile(r"^(\d+), (b['\"].*)$")
+
+
+@dataclass
+class LegacyFiles:
+    directory: Path
+    master: Path
+    salts: Path
+    accounts: Path | None
+    backup: Path | None
+
+
+def find_legacy_files(directory: Path | None = None) -> LegacyFiles | None:
+    """Locate 1.x files in ``directory``. Returns None if there are none, and
+    raises VaultError if two different sets are found (they must not be mixed)."""
+    directory = Path(directory) if directory else data_dir()
+    master = directory / LEGACY_MASTER
+    if not master.exists():
+        return None
+
+    def pick(candidates, what):
+        found = [directory / c for c in candidates if (directory / c).exists()]
+        if len(found) > 1:
+            raise VaultError(f"Found more than one {what} file ({', '.join(map(str, found))}). "
+                             "Keep only the one that belongs with safe/main_password.txt.")
+        return found[0] if found else None
+
+    salts = pick(LEGACY_SALTS_CANDIDATES, "salt.txt")
+    if salts is None:
+        return None
+    backup = directory / LEGACY_BACKUP
+    return LegacyFiles(directory, master, salts, pick(LEGACY_ACCOUNTS_CANDIDATES, "accounts.json"),
+                       backup if backup.exists() else None)
 
 
 def legacy_files_present(directory: Path | None = None) -> bool:
-    directory = Path(directory) if directory else data_dir()
-    return (directory / LEGACY_MASTER).exists() and (directory / LEGACY_SALTS).exists()
+    try:
+        return find_legacy_files(directory) is not None
+    except VaultError:
+        return True     # the upgrade screen will explain the problem
 
 
 def _legacy_decrypt(encrypted: str) -> str:
@@ -767,31 +812,71 @@ def _legacy_decrypt(encrypted: str) -> str:
     return "".join(chr(round(tan(float(p)))) for p in encrypted.split("x")[:-1])
 
 
-def read_legacy_entries(directory: Path, master_password: str) -> list[Entry]:
-    """Verify the 1.x master password and decode the 1.x accounts."""
-    directory = Path(directory)
-    salts = (directory / LEGACY_SALTS).read_text().split("\n")
-    stored_hash = (directory / LEGACY_MASTER).read_text()
-    digest = str(hashlib.sha512((master_password + salts[0]).encode()).digest())
+def _parse_legacy_salts(text: str) -> tuple[str, dict, dict]:
+    """Returns (master salt, numbered salts, salts by line position).
+
+    1.x wrote one bare salt per account, so line N belongs to account N.
+    BetterPassKeeper wrote "N, <salt>" lines instead."""
+    lines = text.split("\n")
+    numbered, positional = {}, {}
+    for position, line in enumerate(lines[1:], start=1):
+        match = _NUMBERED_SALT.match(line)
+        if match:
+            numbered[int(match.group(1))] = match.group(2)
+        elif line:
+            positional[position] = line
+    return lines[0], numbered, positional
+
+
+def _strip_legacy_salt(decoded: str, salt: str | None) -> tuple[str, bool]:
+    """Remove the salt that 1.x appended to every password before encoding it.
+
+    Returns (password, sure). First tries the salt from salt.txt; otherwise
+    looks for the salt itself at the end: a Python bytes literal of 17 bytes
+    (this also works when salt.txt is out of step with accounts.json)."""
+    if salt and decoded.endswith(salt):
+        return decoded[:-len(salt)], True
+    for i in range(len(decoded)):
+        if decoded.startswith(("b'", 'b"'), i):
+            try:
+                value = ast.literal_eval(decoded[i:])
+            except (ValueError, SyntaxError):
+                continue
+            if isinstance(value, bytes) and len(value) == LEGACY_SALT_BYTES:
+                return decoded[:i], True
+    return decoded, False
+
+
+def read_legacy(directory: Path, master_password: str) -> tuple[list[Entry], list[str]]:
+    """Verify the 1.x master password and decode the 1.x accounts.
+
+    Returns (entries, names of accounts whose password could not be checked)."""
+    files = find_legacy_files(directory)
+    if files is None:
+        raise VaultError("No PassKeeper 1.x files were found.")
+    master_salt, numbered, positional = _parse_legacy_salts(files.salts.read_text())
+    stored_hash = files.master.read_text()
+    digest = str(hashlib.sha512((master_password + master_salt).encode()).digest())
     if not secrets.compare_digest(digest, stored_hash):
         raise WrongPasswordError("Wrong master password.")
 
-    accounts_file = directory / LEGACY_ACCOUNTS
-    if not accounts_file.exists():
-        return []
-    accounts = json.loads(accounts_file.read_text())
+    if files.accounts is None:
+        return [], []
+    accounts = json.loads(files.accounts.read_text())
 
-    entries = []
+    entries, unsure = [], []
     for idx in sorted(accounts, key=int):
         account = accounts[idx]
-        salt = salts[int(idx)] if int(idx) < len(salts) else ""
-        decoded = _legacy_decrypt(account["pwd"])
-        if salt and decoded.endswith(salt):
-            password = decoded[:-len(salt)]
-        else:  # same rule the 1.x app used to display passwords
-            password = decoded.split(salt[:-2])[0] if salt[:-2] else decoded
+        salt = numbered.get(int(idx), positional.get(int(idx)))
+        password, sure = _strip_legacy_salt(_legacy_decrypt(account["pwd"]), salt)
         entries.append(Entry(name=account["name"], username=account["usr"], password=password))
-    return entries
+        if not sure:
+            unsure.append(account["name"])
+    return entries, unsure
+
+
+def read_legacy_entries(directory: Path, master_password: str) -> list[Entry]:
+    return read_legacy(directory, master_password)[0]
 
 
 def migrate_legacy(directory: Path | None, master_password: str,
@@ -800,10 +885,13 @@ def migrate_legacy(directory: Path | None, master_password: str,
     the old files.
 
     The old files are only deleted after the new vault has been re-opened and
-    checked to contain exactly the migrated entries."""
+    checked to contain exactly the migrated entries, and only if every
+    password was decoded with certainty. Otherwise they are kept, and
+    ``vault.migration_unsure`` lists the accounts to check by hand."""
     directory = Path(directory) if directory else data_dir()
     vault_path = Path(vault_path) if vault_path else directory / VAULT_FILENAME
-    entries = read_legacy_entries(directory, master_password)
+    files = find_legacy_files(directory)
+    entries, unsure = read_legacy(directory, master_password)
 
     # Old master passwords had no length rule, so don't apply it here.
     kdf = _new_kdf(kdf_params)
@@ -815,11 +903,18 @@ def migrate_legacy(directory: Path | None, master_password: str,
        [(e.name, e.username, e.password) for e in entries]:
         raise VaultError("Migration check failed; the old files were left untouched.")
 
-    for name in (LEGACY_ACCOUNTS, LEGACY_SALTS, LEGACY_MASTER, LEGACY_BACKUP):
-        secure_delete(directory / name)
-    safe_dir = directory / "safe"
-    if safe_dir.is_dir() and not any(safe_dir.iterdir()):
-        safe_dir.rmdir()
+    vault.migration_unsure = list(unsure)
+    vault.legacy_files_kept = bool(unsure)
+    if unsure:
+        return vault
+
+    for path in (files.accounts, files.salts, files.master, files.backup):
+        if path is not None:
+            secure_delete(path)
+    for folder in ("safe", "salts"):
+        folder_path = directory / folder
+        if folder_path.is_dir() and not any(folder_path.iterdir()):
+            folder_path.rmdir()
     return vault
 
 

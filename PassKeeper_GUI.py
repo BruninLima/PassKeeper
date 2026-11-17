@@ -265,7 +265,15 @@ def migrate_window(directory, vault_path):
             except Exception as exc:  # keep the old files, tell the user why
                 error(f"The upgrade failed and your old files were kept:\n{exc}")
                 return None
-            info(f"Upgrade complete: {len(vault.entries)} account(s) moved to the encrypted vault.")
+            message = f"Upgrade complete: {len(vault.entries)} account(s) moved to the encrypted vault."
+            if vault.legacy_files_kept:
+                names = "\n".join(f"  - {name}" for name in vault.migration_unsure[:15])
+                more = len(vault.migration_unsure) - 15
+                message += ("\n\nThe password of these accounts could not be checked automatically:\n"
+                            f"{names}" + (f"\n  ...and {more} more" if more > 0 else "") +
+                            "\n\nPlease compare them with the passwords you know. The old files "
+                            "were NOT deleted; delete them yourself once everything is right.")
+            info(message)
             return vault
     finally:
         window.close()

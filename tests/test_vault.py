@@ -479,6 +479,122 @@ class MigrationTests(TempDirTest):
         self.assertEqual(self.migrate(MASTER).entries, [])
 
 
+class BetterPassKeeperMigrationTests(TempDirTest):
+    """Files written by the local "BetterPassKeeper" version: sub-folders
+    (data/, salts/, safe/) and salt lines written as "<number>, <salt>"."""
+
+    def make_v1(self, master, accounts):
+        old_cwd = os.getcwd()
+        os.chdir(self.dir)
+        try:
+            (self.dir / "safe").mkdir()
+            legacy_v1.store_main_password("someone", master)
+            for name, usr, pwd in accounts:
+                legacy_v1.addentry(name, usr, pwd)
+        finally:
+            os.chdir(old_cwd)
+
+    def move_to_subfolders(self):
+        (self.dir / "data").mkdir()
+        (self.dir / "salts").mkdir()
+        (self.dir / "salt.txt").rename(self.dir / "salts" / "salt.txt")
+        if (self.dir / "accounts.json").exists():
+            (self.dir / "accounts.json").rename(self.dir / "data" / "accounts.json")
+
+    def better_add(self, name, username, password):
+        """Exactly what BetterPassKeeper.show_add_account().save() did."""
+        from secrets import SystemRandom, token_bytes
+        data_file = self.dir / "data" / "accounts.json"
+        accounts = json.loads(data_file.read_text()) if data_file.exists() else {}
+        entry_idx = len(accounts) + 1
+        seed = int(SystemRandom().random() ** 10)
+        pwd_salt = str(token_bytes(16 + len(username) ** seed))
+        accounts[str(entry_idx)] = {"name": name, "usr": username,
+                                    "pwd": legacy_v1.encrypt(password + pwd_salt)}
+        data_file.write_text(json.dumps(accounts, indent=4))
+        with open(self.dir / "salts" / "salt.txt", "a") as f:
+            f.write("\n")
+            f.write(str(entry_idx) + ", " + pwd_salt)
+
+    def better_shows(self, entry_idx):
+        """What BetterPassKeeper displayed (its show_details logic)."""
+        accounts = json.loads((self.dir / "data" / "accounts.json").read_text())
+        temp = (self.dir / "salts" / "salt.txt").read_text()
+        seed_idx = temp.split(str(entry_idx) + ", ")[-1].split(str(entry_idx + 1) + ", ")[0]
+        dec = legacy_v1.decrypt(accounts[str(entry_idx)]["pwd"].split(seed_idx[:-2])[0])
+        return dec.split("b'")[0].split('b"')[0]
+
+    def migrate(self, master=MASTER):
+        return Pk.migrate_legacy(self.dir, master, self.vault_path, FAST_KDF)
+
+    def test_mixed_v1_and_better_accounts(self):
+        self.make_v1(MASTER, [("Email", "me@x.com", "Tiger-12-Ocean"), ("Bank", "123", "pässwörd ✓")])
+        self.move_to_subfolders()
+        self.better_add("Steam", "brunin", "hunter2hunter2")
+        self.better_add("Quotes", "q", "it's \"quoted\"")
+        self.better_add("Tricky", "t", "ab'c and b\"x")   # contains b' and b"
+        self.assertTrue(Pk.legacy_files_present(self.dir))
+        self.assertEqual(self.better_shows(3), "hunter2hunter2")   # fixture sanity check
+
+        vault = self.migrate()
+        self.assertEqual([(e.name, e.username, e.password) for e in vault.entries], [
+            ("Email", "me@x.com", "Tiger-12-Ocean"), ("Bank", "123", "pässwörd ✓"),
+            ("Steam", "brunin", "hunter2hunter2"), ("Quotes", "q", "it's \"quoted\""),
+            ("Tricky", "t", "ab'c and b\"x")])
+        self.assertEqual(vault.migration_unsure, [])
+        self.assertFalse(vault.legacy_files_kept)
+        self.assertFalse(Pk.legacy_files_present(self.dir))
+        self.assertFalse((self.dir / "data" / "accounts.json").exists())
+        self.assertFalse((self.dir / "salts").exists())
+        self.assertFalse((self.dir / "safe").exists())
+
+    def test_better_only(self):
+        self.make_v1(MASTER, [])
+        self.move_to_subfolders()
+        self.better_add("A", "a", "first password")
+        self.better_add("B", "b", "second")
+        vault = self.migrate()
+        self.assertEqual([e.password for e in vault.entries], ["first password", "second"])
+
+    def test_salt_file_out_of_step_still_decodes(self):
+        self.make_v1(MASTER, [("A", "a", "pw-a"), ("B", "b", "pw-b"), ("C", "c", "pw-c")])
+        salt_file = self.dir / "salt.txt"
+        lines = salt_file.read_text().split("\n")
+        salt_file.write_text("\n".join(lines[:2] + lines[3:]))   # lose B's salt line
+        vault = self.migrate()
+        self.assertEqual([e.password for e in vault.entries], ["pw-a", "pw-b", "pw-c"])
+
+    def test_wrong_password(self):
+        self.make_v1(MASTER, [])
+        self.move_to_subfolders()
+        self.better_add("A", "a", "1")
+        with self.assertRaises(Pk.WrongPasswordError):
+            self.migrate("not it")
+        self.assertTrue((self.dir / "data" / "accounts.json").exists())
+
+    def test_two_sets_are_refused(self):
+        self.make_v1(MASTER, [("A", "a", "1")])
+        (self.dir / "salts").mkdir()
+        (self.dir / "salts" / "salt.txt").write_text((self.dir / "salt.txt").read_text())
+        with self.assertRaises(Pk.VaultError) as ctx:
+            self.migrate()
+        self.assertIn("more than one", str(ctx.exception))
+        self.assertFalse(self.vault_path.exists())
+        self.assertTrue((self.dir / "salt.txt").exists())
+
+    def test_undecodable_password_keeps_old_files(self):
+        self.make_v1(MASTER, [("Good", "g", "fine"), ("Odd", "o", "x")])
+        accounts_file = self.dir / "accounts.json"
+        accounts = json.loads(accounts_file.read_text())
+        accounts["2"]["pwd"] = legacy_v1.encrypt("no salt here")   # salt missing
+        accounts_file.write_text(json.dumps(accounts))
+        vault = self.migrate()
+        self.assertEqual(vault.migration_unsure, ["Odd"])
+        self.assertTrue(vault.legacy_files_kept)
+        self.assertTrue(accounts_file.exists())                 # nothing deleted
+        self.assertEqual(Pk.Vault.open(self.vault_path, MASTER).entries[0].password, "fine")
+
+
 class GeneratorTests(unittest.TestCase):
     def test_generates_from_dictionary(self):
         import PasswordGenerator as G
