@@ -62,10 +62,17 @@ It asks for the master password and for you to type `DELETE`.
 
 ### Upgrading from 1.x
 
-If PassKeeper finds 1.x files (`accounts.json`, `salt.txt`, `safe/main_password.txt`) next to
-the app, it asks for your old master password and moves everything into the new encrypted
-vault. The old files are overwritten and deleted after the new vault has been checked. They
-have to go: 1.x did not really encrypt passwords, so anyone with those files could read them.
+If PassKeeper finds 1.x files next to the app, it asks for your old master password and moves
+everything into the new encrypted vault. Both layouts are recognised:
+
+- 1.x: `accounts.json`, `salt.txt` and `safe/main_password.txt`;
+- the later "BetterPassKeeper" version: `data/accounts.json`, `salts/salt.txt` and
+  `safe/main_password.txt`.
+
+The old files are overwritten and deleted after the new vault has been checked. They have to
+go: 1.x did not really encrypt passwords, so anyone with those files could read them. If any
+password can't be decoded with certainty, the old files are kept and the upgrade lists the
+accounts to check by hand.
 
 ## How your data is protected
 

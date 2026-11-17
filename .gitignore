@@ -4,9 +4,11 @@ vault.pk.*.tmp
 vault.pk.lock
 backups/
 
-# PassKeeper 1.x files
+# PassKeeper 1.x / BetterPassKeeper files
 accounts.json
+data/accounts.json
 salt.txt
+salts/
 bkp.txt
 safe/
 
