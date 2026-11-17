@@ -119,10 +119,20 @@ xvfb-run -a python -m unittest discover -s tests -v
 With PyInstaller (run in the project folder on Windows):
 
 ```bash
-pyinstaller --onefile -w --icon=Figures\padlock.ico --add-data "data;data" --add-data "Figures;Figures" PassKeeper_GUI.py
+pip install pyinstaller
 ```
 
-Admin rights (`--uac-admin`) are not needed. The vault is created next to the .exe.
+```bash
+pyinstaller --onefile -w --name PassKeeper --icon=Figures\padlock.ico --add-data "data\english.csv;data" --add-data "Figures;Figures" PassKeeper_GUI.py
+```
+
+The .exe is created as `dist\PassKeeper.exe`. Only the word list (`data\english.csv`) is
+bundled, never the whole `data` folder: during an upgrade from an old version that folder can
+also hold `accounts.json`.
+
+The app keeps its vault and backups **next to the .exe**, so move `PassKeeper.exe` into the
+folder that holds your `vault.pk` (not into `Program Files`, which it can't write to). Admin
+rights (`--uac-admin`) are not needed.
 
 ## Latest changes
 
